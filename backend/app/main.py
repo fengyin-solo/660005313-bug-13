@@ -1,5 +1,6 @@
 import asyncio, math, random, time, json, threading
 from collections import defaultdict, deque
+from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ DEVICE_TYPES = ["CNC", "RobotArm", "Conveyor", "AGV", "InjectionMolding", "QCSta
 STATUSES = ["RUNNING", "IDLE", "FAULT", "OFFLINE"]
 ACTIVE_CLIENTS: list[WebSocket] = []
 SIMULATOR_RUNNING = True
+SAMPLE_RETENTION_SECONDS = 30 * 60
 
 class DeviceState:
     def __init__(self, did: int, dtype: str, x: float, y: float, z: float):
@@ -42,6 +44,7 @@ devices = {i: DeviceState(i, random.choice(DEVICE_TYPES),
 
 production_log = []
 anomaly_log = []
+sample_history = defaultdict(lambda: deque())
 
 class AnomalyRules:
     def __init__(self):
@@ -74,8 +77,20 @@ class AnomalyRules:
 
 rules_engine = AnomalyRules()
 
+
+def reading_from_device(dev: DeviceState, timestamp: float):
+    return {
+        "device_id": dev.id,
+        "timestamp": timestamp,
+        "temperature": round(dev.temperature, 2),
+        "vibration": round(dev.vibration, 3),
+        "status": dev.status,
+    }
+
+
 def simulate():
     while SIMULATOR_RUNNING:
+        tick_ts = time.time()
         for dev in devices.values():
             drift = 0.1 * math.sin(time.time() * 0.5 + dev.id)
             noise = random.gauss(0, 0.3)
@@ -101,14 +116,22 @@ def simulate():
             if triggers and dev.status != "FAULT" and random.random() < 0.3:
                 dev.status = "FAULT"
 
-        production_log.append({"timestamp": time.time(), "count": sum(d.production_count for d in devices.values())})
+        readings = [reading_from_device(dev, tick_ts) for dev in devices.values()]
+        for reading in readings:
+            history = sample_history[reading["device_id"]]
+            history.append(reading)
+            while history and history[0]["timestamp"] < tick_ts - SAMPLE_RETENTION_SECONDS:
+                history.popleft()
+        production_log.append({"timestamp": tick_ts, "count": sum(d.production_count for d in devices.values())})
 
         try:
             payload = {
                 "devices": [d.to_dict() for d in devices.values()],
                 "production": sum(d.production_count for d in devices.values()),
                 "anomalies": anomaly_log[-5:] if anomaly_log else [],
-                "oee": calculate_oee()
+                "oee": calculate_oee(),
+                "timestamp": tick_ts,
+                "samples": readings
             }
             msg = json.dumps(payload)
         except:
@@ -168,6 +191,23 @@ def get_oee():
 @app.get("/api/production")
 def get_production():
     return {"log": production_log[-60:]}
+
+
+@app.get("/api/devices/{device_id}/samples")
+def get_device_samples(device_id: int, start: Optional[float] = None, end: Optional[float] = None):
+    dev = devices.get(device_id)
+    if dev is None:
+        return {"device_id": device_id, "samples": []}
+
+    samples = []
+    for sample in sample_history.get(device_id, []):
+        timestamp = sample["timestamp"]
+        if start is not None and timestamp < start:
+            continue
+        if end is not None and timestamp > end:
+            continue
+        samples.append(sample)
+    return {"device_id": device_id, "samples": samples}
 
 
 @app.websocket("/ws")

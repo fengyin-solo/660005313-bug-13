@@ -5,6 +5,17 @@ export interface Device {
   uptime: number; quality_rate: number
 }
 
+export interface SensorSample {
+  timestamp: number
+  temperature: number
+  vibration: number
+  status?: string
+}
+
+export interface SensorReading extends SensorSample {
+  device_id: number
+}
+
 export interface Anomaly {
   timestamp: number; triggers: { device_id: number; rule: string; value: number; threshold: string }[]
   device_type: string
@@ -20,6 +31,8 @@ export interface FactoryData {
   production: number
   anomalies: Anomaly[]
   oee: OEEItem[]
+  samples?: SensorReading[]
+  timestamp?: number
 }
 
 export const DEVICE_COLORS: Record<string, string> = {
