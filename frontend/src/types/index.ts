@@ -20,6 +20,15 @@ export interface FactoryData {
   production: number
   anomalies: Anomaly[]
   oee: OEEItem[]
+  /** 本帧采样时刻（秒级时间戳，由后端统一打标） */
+  timestamp?: number
+}
+
+/** 温度/振动采样点，同一序列同时驱动两条曲线 */
+export interface TrendSample {
+  t: number    // 采样时刻（毫秒时间戳）
+  temp: number // 温度 °C
+  vib: number  // 振动 mm/s
 }
 
 export const DEVICE_COLORS: Record<string, string> = {

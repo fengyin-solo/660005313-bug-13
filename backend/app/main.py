@@ -12,6 +12,7 @@ DEVICE_TYPES = ["CNC", "RobotArm", "Conveyor", "AGV", "InjectionMolding", "QCSta
 STATUSES = ["RUNNING", "IDLE", "FAULT", "OFFLINE"]
 ACTIVE_CLIENTS: list[WebSocket] = []
 SIMULATOR_RUNNING = True
+MAIN_LOOP = None  # asyncio 主循环，启动时捕获，供模拟线程广播用
 
 class DeviceState:
     def __init__(self, did: int, dtype: str, x: float, y: float, z: float):
@@ -105,6 +106,7 @@ def simulate():
 
         try:
             payload = {
+                "timestamp": time.time(),
                 "devices": [d.to_dict() for d in devices.values()],
                 "production": sum(d.production_count for d in devices.values()),
                 "anomalies": anomaly_log[-5:] if anomaly_log else [],
@@ -117,8 +119,10 @@ def simulate():
         dead = []
         for ws in ACTIVE_CLIENTS:
             try:
-                asyncio.run_coroutine_threadsafe(ws.send_text(msg), asyncio.get_event_loop())
-            except:
+                if MAIN_LOOP is None:
+                    raise RuntimeError("event loop not ready")
+                asyncio.run_coroutine_threadsafe(ws.send_text(msg), MAIN_LOOP)
+            except Exception:
                 dead.append(ws)
         for ws in dead:
             if ws in ACTIVE_CLIENTS:
@@ -151,6 +155,8 @@ class OEEAnalysis(BaseModel):
 
 @app.on_event("startup")
 async def startup():
+    global MAIN_LOOP
+    MAIN_LOOP = asyncio.get_running_loop()
     t = threading.Thread(target=simulate, daemon=True)
     t.start()
 
